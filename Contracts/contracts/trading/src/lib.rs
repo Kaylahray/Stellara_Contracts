@@ -1,5 +1,5 @@
 #![no_std]
-use shared::fees::{FeeError, FeeManager};
+use shared::fees::FeeManager;
 use shared::governance::{GovernanceManager, GovernanceRole, UpgradeProposal};
 use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env, Symbol};
 
@@ -53,6 +53,7 @@ pub enum TradeError {
     InvalidAmount = 3002,
     ContractPaused = 3003,
     NotInitialized = 3004,
+    InsufficientBalance = 3005,
 }
 
 impl From<TradeError> for soroban_sdk::Error {
@@ -123,23 +124,24 @@ impl UpgradeableTradingContract {
         fee_token: Address,
         fee_amount: i128,
         fee_recipient: Address,
-    ) -> Result<u64, FeeError> {
+    ) -> Result<u64, TradeError> {
         trader.require_auth();
 
         // Fast-fail validation before any storage operations
         if amount <= 0 {
-            return Err(FeeError::InvalidAmount);
+            return Err(TradeError::InvalidAmount);
         }
 
         let storage = env.storage().persistent();
 
         // Check pause state - single storage read
         if storage.get(&storage_keys::PAUSE).unwrap_or(false) {
-            panic!("PAUSED");
+            return Err(TradeError::ContractPaused);
         }
 
         // Collect fee after validation but before state changes
-        FeeManager::collect_fee(&env, &fee_token, &trader, &fee_recipient, fee_amount)?;
+        FeeManager::collect_fee(&env, &fee_token, &trader, &fee_recipient, fee_amount)
+            .map_err(|_| TradeError::InsufficientBalance)?;
 
         // Get trade counter - single atomic read
         let trade_id: u64 = storage.get(&storage_keys::TRADE_COUNT).unwrap_or(0) + 1;
